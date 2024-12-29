@@ -4,8 +4,14 @@ import 'package:flutter/services.dart';
 import 'dart:async';
 import 'package:flutter_face_api/flutter_face_api.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:http/http.dart' as http;
 
-void main() => runApp(new MaterialApp(home: new MyApp()));
+void main() => runApp(MaterialApp(home: MyApp()));
+
+class MyApp extends StatefulWidget {
+  @override
+  _MyAppState createState() => _MyAppState();
+}
 
 class _MyAppState extends State<MyApp> {
   var faceSdk = FaceSDK.instance;
@@ -25,57 +31,24 @@ class _MyAppState extends State<MyApp> {
   MatchFacesImage? mfImage1;
   MatchFacesImage? mfImage2;
 
-  void init() async {
+  final ImagePicker _picker = ImagePicker();
+
+  @override
+  void initState() {
     super.initState();
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+    init();
+  }
+
+  void init() async {
     if (!await initialize()) return;
     status = "Ready";
   }
 
-  startLiveness() async {
-    var result = await faceSdk.startLiveness(
-      config: LivenessConfig(skipStep: [LivenessSkipStep.ONBOARDING_STEP]),
-      notificationCompletion: (notification) {
-        print(notification.status);
-      },
-    );
-    if (result.image == null) return;
-    setImage(result.image!, ImageType.LIVE, 1);
-    livenessStatus = result.liveness.name.toLowerCase();
-  }
-
-  matchFaces() async {
-    if (mfImage1 == null || mfImage2 == null) {
-      status = "Both images required!";
-      return;
-    }
-    status = "Processing...";
-    var request = MatchFacesRequest([mfImage1!, mfImage2!]);
-    var response = await faceSdk.matchFaces(request);
-    var split = await faceSdk.splitComparedFaces(response.results, 0.75);
-    var match = split.matchedFaces;
-    similarityStatus = "failed";
-    if (match.isNotEmpty) {
-      similarityStatus = (match[0].similarity * 100).toStringAsFixed(2) + "%";
-    }
-    status = "Ready";
-  }
-
-  clearResults() {
-    status = "Ready";
-    similarityStatus = "nil";
-    livenessStatus = "nil";
-    uiImage2 = Image.asset('assets/images/portrait.png');
-    uiImage1 = Image.asset('assets/images/portrait.png');
-    mfImage1 = null;
-    mfImage2 = null;
-  }
-
-  // If 'assets/regula.license' exists, init using license(enables offline match)
-  // otherwise init without license.
   Future<bool> initialize() async {
     status = "Initializing...";
     var license = await loadAssetIfExists("assets/regula.license");
-    InitConfig? config = null;
+    InitConfig? config;
     if (license != null) config = InitConfig(license);
     var (success, error) = await faceSdk.initialize(config: config);
     if (!success) {
@@ -93,6 +66,20 @@ class _MyAppState extends State<MyApp> {
     }
   }
 
+  Future<void> setImageFromUrl(String url, int number) async {
+    try {
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode == 200) {
+        final imageBytes = response.bodyBytes; // Get image data as Uint8List
+        setImage(imageBytes, ImageType.PRINTED, number); // Update the UI
+      } else {
+        status = "Failed to load image from URL!";
+      }
+    } catch (e) {
+      status = "Error: $e";
+    }
+  }
+
   setImage(Uint8List bytes, ImageType type, int number) {
     similarityStatus = "nil";
     var mfImage = MatchFacesImage(bytes, type);
@@ -107,41 +94,23 @@ class _MyAppState extends State<MyApp> {
     }
   }
 
-  Widget useGallery(int number) {
-    return textButton("Use gallery", () async {
-      Navigator.pop(context);
-      var image = await ImagePicker().pickImage(source: ImageSource.gallery);
-      if (image != null) {
-        setImage(File(image.path).readAsBytesSync(), ImageType.PRINTED, number);
-      }
-    });
-  }
-
-  Widget useCamera(int number) {
-    return textButton("Use camera", () async {
-      Navigator.pop(context);
-      var response = await faceSdk.startFaceCapture();
-      var image = response.image;
-      if (image != null) setImage(image.image, image.imageType, number);
-    });
-  }
-
   Widget image(Image image, Function() onTap) => GestureDetector(
-        onTap: onTap,
-        child: Image(height: 150, width: 150, image: image.image),
-      );
+    onTap: onTap,
+    child: Image(height: 150, width: 150, image: image.image),
+  );
 
   Widget button(String text, Function() onPressed) {
     return Container(
       child: textButton(text, onPressed,
           style: ButtonStyle(
-            backgroundColor: WidgetStateProperty.all<Color>(Colors.black12),
+            backgroundColor: MaterialStateProperty.all<Color>(Colors.black12),
           )),
       width: 250,
     );
   }
 
   Widget text(String text) => Text(text, style: TextStyle(fontSize: 18));
+
   Widget textButton(String text, Function() onPressed, {ButtonStyle? style}) =>
       TextButton(
         child: Text(text),
@@ -149,29 +118,20 @@ class _MyAppState extends State<MyApp> {
         style: style,
       );
 
-  setImageDialog(BuildContext context, int number) => showDialog(
-        context: context,
-        builder: (BuildContext context) => AlertDialog(
-          title: Text("Select option"),
-          actions: [useGallery(number), useCamera(number)],
-        ),
-      );
-
   @override
-  Widget build(BuildContext bc) {
+  Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Center(child: Text(_status))),
       body: Container(
-        margin: EdgeInsets.fromLTRB(0, 0, 0, MediaQuery.of(bc).size.height / 8),
+        margin: EdgeInsets.fromLTRB(0, 0, 0, MediaQuery.of(context).size.height / 8),
         width: double.infinity,
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
-            image(_uiImage1, () => setImageDialog(bc, 1)),
-            image(_uiImage2, () => setImageDialog(bc, 2)),
+            image(_uiImage1, () => setImageFromUrl("https://avatars.githubusercontent.com/u/62563665?v=4", 1)),
+            image(_uiImage2, () => getImageFromCamera()),
             Container(margin: EdgeInsets.fromLTRB(0, 0, 0, 15)),
             button("Match", () => matchFaces()),
-            button("Liveness", () => startLiveness()),
             button("Clear", () => clearResults()),
             Container(margin: EdgeInsets.fromLTRB(0, 15, 0, 0)),
             Row(
@@ -188,15 +148,38 @@ class _MyAppState extends State<MyApp> {
     );
   }
 
-  @override
-  void initState() {
-    super.initState();
-    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
-    init();
+  Future<void> getImageFromCamera() async {
+    final XFile? image = await _picker.pickImage(source: ImageSource.camera);
+    if (image != null) {
+      final bytes = await image.readAsBytes();
+      setImage(bytes, ImageType.LIVE, 2);
+    }
   }
-}
 
-class MyApp extends StatefulWidget {
-  @override
-  _MyAppState createState() => _MyAppState();
+  Future<void> matchFaces() async {
+    if (mfImage1 == null || mfImage2 == null) {
+      status = "Both images required!";
+      return;
+    }
+    status = "Processing...";
+    var request = MatchFacesRequest([mfImage1!, mfImage2!]);
+    var response = await faceSdk.matchFaces(request);
+    var split = await faceSdk.splitComparedFaces(response.results, 0.75);
+    var match = split.matchedFaces;
+    similarityStatus = "failed";
+    if (match.isNotEmpty) {
+      similarityStatus = (match[0].similarity * 100).toStringAsFixed(2) + "%";
+    }
+    status = "Ready";
+  }
+
+  void clearResults() {
+    status = "Ready";
+    similarityStatus = "nil";
+    livenessStatus = "nil";
+    uiImage2 = Image.asset('assets/images/portrait.png');
+    uiImage1 = Image.asset('assets/images/portrait.png');
+    mfImage1 = null;
+    mfImage2 = null;
+  }
 }
